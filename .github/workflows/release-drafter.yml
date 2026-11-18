@@ -1,0 +1,27 @@
+# main 에 PR 이 머지될 때마다 다음 릴리스의 변경로그 '초안'을 갱신합니다.
+# 초안(draft)만 만들고 발행은 하지 않습니다 — 실제 발행은 태그를 달 때 release.yml 이 합니다.
+name: release-drafter
+
+on:
+  push:
+    branches: [main]
+  # PR 에서는 돌리지 않습니다. Release Drafter 는 설정 파일을 '기본 브랜치(main)'
+  # 에서만 읽어서, main 에 설정이 올라가기 전(= 이 기능 PR)에는 PR 마다 'config not
+  # found' 로 실패합니다. 오토라벨러를 안 쓰므로 pull_request 트리거는 불필요합니다.
+
+permissions:
+  contents: read
+
+jobs:
+  update_draft:
+    permissions:
+      contents: write        # 릴리스 초안 생성/갱신
+      pull-requests: read     # 머지된 PR 을 읽어 분류
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          publish: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

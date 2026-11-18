@@ -1,0 +1,51 @@
+# vX.Y.Z 태그를 푸시하면 실제 릴리스를 발행합니다.
+#  1) release-drafter 가 그동안 누적한 초안을 이 태그로 '발행'(publish) — 변경로그 확정
+#  2) softprops/action-gh-release 가 소스 zip 을 그 릴리스에 첨부
+# 바이너리 빌드가 없는 파이썬 소스 프로젝트라, 산출물은 재현 가능한 소스 zip 하나입니다.
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    permissions:
+      contents: write        # 릴리스 발행 + 에셋 업로드
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # 변경로그 비교를 위해 전체 히스토리
+
+      - name: 소스 zip 만들기
+        run: |
+          git archive --format=zip \
+            --prefix="gymhall-${GITHUB_REF_NAME}/" \
+            -o "gymhall-${GITHUB_REF_NAME}.zip" HEAD
+          sha256sum "gymhall-${GITHUB_REF_NAME}.zip" > "gymhall-${GITHUB_REF_NAME}.zip.sha256"
+
+      - name: 변경로그 초안을 이 태그로 발행
+        id: drafter
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          publish: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 소스 zip 을 릴리스에 첨부
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            gymhall-${{ github.ref_name }}.zip
+            gymhall-${{ github.ref_name }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
