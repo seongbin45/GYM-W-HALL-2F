@@ -1,0 +1,26 @@
+# main 에 PR 이 머지될 때마다 다음 릴리스의 변경로그 '초안'을 갱신합니다.
+# 초안(draft)만 만들고 발행은 하지 않습니다 — 실제 발행은 태그를 달 때 release.yml 이 합니다.
+name: release-drafter
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  update_draft:
+    permissions:
+      contents: write        # 릴리스 초안 생성/갱신
+      pull-requests: read     # 머지된 PR 을 읽어 분류
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          publish: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
