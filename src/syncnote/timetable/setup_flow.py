@@ -490,8 +490,15 @@ class SetupFlow(QDialog):
         if not st.get("ffmpeg") and cmd is not None and "ffmpeg" not in self._remedies:
             self._remedies.add("ffmpeg")
             self._say("ffmpeg 만 다시 받습니다.")
-            self._run_retrying("install", lambda: cmd,
-                               lambda _rc, _o: self._verify_install(), kind="remedy")
+
+            def after_ffmpeg(_rc: int, out: str) -> None:
+                # install_ffmpeg.bat(--auto)이 전부 실패하면 '다음 할 일: …' 한 줄을 남김
+                hints = [ln.split(":", 1)[1].strip() for ln in out.splitlines()
+                         if ln.strip().startswith("다음 할 일:")]
+                if hints:
+                    self._install_hint = "ffmpeg — " + hints[-1]
+                self._verify_install()
+            self._run_retrying("install", lambda: cmd, after_ffmpeg, kind="remedy")
             return True
         cmd = self.tailscale_command()
         if not st.get("tailscale") and cmd is not None and "tailscale" not in self._remedies:
@@ -540,7 +547,9 @@ class SetupFlow(QDialog):
                 # 패키지만 남음 → 바로 다음 '라이브러리 확인' 단계가 채우도록 만든 흐름.
                 self._mark("install", "ok", "설치됨 — 남은 패키지는 다음 단계에서 채움" + code)
             else:
-                self._mark("install", "warn", "덜 됨: " + " · ".join(gaps) + code)
+                hint = getattr(self, "_install_hint", "")
+                self._mark("install", "warn", "덜 됨: " + " · ".join(gaps) + code
+                           + (f"\n다음 할 일: {hint}" if hint else ""))
             self._next()
         self._run(self.state_command(), post)
 

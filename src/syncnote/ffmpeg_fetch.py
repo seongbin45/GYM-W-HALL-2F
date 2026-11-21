@@ -63,7 +63,14 @@ class Fatal(Exception):
 
 
 class CandidateFailed(Exception):
-    """이 후보만 못 씀 — 이전 릴리스로 롤백."""
+    """이 후보만 못 씀 — 이전 릴리스로 롤백.
+
+    kind: net(내려받기) · hash(해시 다름) · feature(기능 없음) · other
+    """
+
+    def __init__(self, msg: str, kind: str = "other") -> None:
+        super().__init__(msg)
+        self.kind = kind
 
 
 @dataclass
@@ -83,6 +90,8 @@ class Result:
     ffmpeg: str = ""
     used: Candidate | None = None
     tried: list[tuple[str, str]] = field(default_factory=list)   # (버전, 실패 이유)
+    kinds: list[str] = field(default_factory=list)                # tried 와 같은 순서
+    list_failed: bool = False                                     # 릴리스 목록을 못 읽음
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +192,10 @@ def download(c: Candidate, dest: Path, *, opener: Callable = _open,
                 say(f"      내려받기 끊김({exc}) — {BACKOFF[attempt]}초 뒤 다시")
                 sleep(BACKOFF[attempt])
                 continue
-            raise CandidateFailed(f"내려받기 실패: {exc}") from exc
+            raise CandidateFailed(f"내려받기 실패: {exc}", "net") from exc
     if c.sha256 and h.hexdigest() != c.sha256:
         part.unlink(missing_ok=True)
-        raise CandidateFailed("SHA-256 이 릴리스에 적힌 값과 다름")
+        raise CandidateFailed("SHA-256 이 릴리스에 적힌 값과 다름", "hash")
     part.replace(dest)
     return dest
 
@@ -275,9 +284,12 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
     except Exception as exc:  # noqa: BLE001 — 목록을 못 읽어도 마지막 후보는 있음
         say(f"[!] 릴리스 목록을 읽지 못했습니다({exc}). gyan.dev 로 시도합니다.")
         cands = []
+        listing_failed = True
+    else:
+        listing_failed = False
     cands.append(gyan_candidate(opener))
 
-    result = Result(False)
+    result = Result(False, list_failed=listing_failed)
     dest.mkdir(parents=True, exist_ok=True)
     for i, c in enumerate(cands):
         if i:
@@ -288,24 +300,249 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         try:
             z = download(c, work / c.name, opener=opener, sleep=sleep, say=say)
             say("      해시 확인 " + ("통과" if c.sha256 else "생략(릴리스에 해시 없음)"))
-            folder = extract(z, work / "x")
-            lack = missing_features(folder / "bin" / "ffmpeg.exe", run=run)
-            if lack:
-                raise CandidateFailed("녹화에 필요한 기능 없음: " + ", ".join(lack))
-            exe = swap_in(folder, dest)
+            exe = _install_zip(z, work, dest, run=run)
             say(f"완료: {exe}  ({c.version})")
             result.ok, result.ffmpeg, result.used = True, str(exe), c
             return result
         except CandidateFailed as exc:
             say(f"      [X] {exc}")
             result.tried.append((c.version, str(exc)))
+            result.kinds.append(exc.kind)
         except Fatal as exc:
             say(f"[X] {exc}")
             result.tried.append((c.version, str(exc)))
+            result.kinds.append("fatal")
             return result
         finally:
             shutil.rmtree(work, ignore_errors=True)
     return result
+
+
+def _install_zip(z: Path, work: Path, dest: Path, *, run: Callable = subprocess.run) -> Path:
+    """받았거나 가져온 zip 하나: 압축 풀기 -> 기능 확인 -> tools\\ffmpeg 로 바꿔 끼우기."""
+    folder = extract(z, work / "x")
+    lack = missing_features(folder / "bin" / "ffmpeg.exe", run=run)
+    if lack:
+        raise CandidateFailed("녹화에 필요한 기능 없음: " + ", ".join(lack), "feature")
+    return swap_in(folder, dest)
+
+
+def install_from_zip(z: Path, dest: Path, *, sha256: str = "", run: Callable = subprocess.run,
+                     say: Callable[[str], None] = None) -> str:
+    """오프라인: 사용자가 USB 등으로 가져온 zip. 쓸 수 있게 되면 경로, 아니면 ''."""
+    say = say or _say
+    dest = Path(dest)
+    say(f"가져온 zip 으로 설치합니다: {z}")
+    if sha256:
+        h = hashlib.sha256(Path(z).read_bytes()).hexdigest()
+        if h != sha256.lower():
+            say("      [X] SHA-256 이 적어 준 값과 다릅니다")
+            return ""
+    dest.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="_ffmpeg_", dir=dest))
+    try:
+        exe = _install_zip(Path(z), work, dest, run=run)
+    except (CandidateFailed, Fatal) as exc:
+        say(f"      [X] {exc}")
+        return ""
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    say(f"완료: {exe}")
+    return str(exe)
+
+
+def offline_zips(*folders: Path) -> list[Path]:
+    """가져다 둔 ffmpeg zip 들(새 것부터). 이름에 ffmpeg 가 든 .zip 만."""
+    out: list[Path] = []
+    for d in folders:
+        if d and Path(d).is_dir():
+            out += [p for p in Path(d).glob("*.zip") if "ffmpeg" in p.name.lower()]
+    return sorted(out, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# winget — 없거나 정책으로 막혔으면 다음부터 건너뜀
+# ---------------------------------------------------------------------------
+WINGET_ARGS = ["install", "--id", "Gyan.FFmpeg", "-e", "--source", "winget", "--silent",
+               "--disable-interactivity", "--accept-source-agreements",
+               "--accept-package-agreements"]
+_POLICY = re.compile(r"group polic|그룹 정책|disabled by .*polic|관리자가 .*차단", re.I)
+
+
+@dataclass
+class WingetOutcome:
+    ffmpeg: str = ""
+    reason: str = ""
+    permanent: bool = False          # 다시 해도 같음 -> 다음 실행부터 건너뜀
+
+
+def winget_install(*, which: Callable = shutil.which, run: Callable = subprocess.run,
+                   find: Callable[[], str] = None,
+                   say: Callable[[str], None] = None) -> WingetOutcome:
+    say = say or _say
+    find = find or (lambda: find_usable(say=lambda _m: None))
+    exe = which("winget")
+    if not exe:
+        return WingetOutcome(reason="winget 이 없음(이 Windows 에는 앱 설치 관리자가 없음)",
+                             permanent=True)
+    say("winget 으로 ffmpeg 를 설치합니다... (약 250MB, 몇 분 걸립니다)")
+    try:
+        p = run([exe, *WINGET_ARGS], capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=1800)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return WingetOutcome(reason=f"winget 실행 실패: {exc}")
+    out = (p.stdout or "") + (p.stderr or "")
+    for line in out.splitlines()[-8:]:
+        if line.strip():
+            say("      " + line.strip()[:160])
+    # 종료 코드가 실패여도 이미 설치돼 있을 수 있어, 성공은 실제로 찾아서 판정
+    found = find()
+    if found:
+        return WingetOutcome(ffmpeg=found)
+    if _POLICY.search(out):
+        return WingetOutcome(reason="winget 이 정책으로 막혀 있음", permanent=True)
+    return WingetOutcome(reason=f"winget 설치 실패 (종료 코드 {p.returncode})")
+
+
+# ---------------------------------------------------------------------------
+# 원인별 자동 흐름: 찾기 -> 가져온 zip -> pip -> winget -> 릴리스 -> 다운로드 폴더 zip
+# ---------------------------------------------------------------------------
+@dataclass
+class Step:
+    name: str
+    status: str                     # ok · fail · skip · fatal
+    reason: str = ""
+
+
+@dataclass
+class AutoResult:
+    ok: bool
+    ffmpeg: str = ""
+    steps: list[Step] = field(default_factory=list)
+    next_action: str = ""
+
+
+def _state(path: Path | None) -> dict:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(path: Path | None, data: dict) -> None:
+    if not path:
+        return
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass                                # 기록 실패로 설치를 멈추지 않음
+
+
+def next_action(steps: list[Step], kinds: list[str], *, list_failed: bool = False,
+                proxy: str | None = None) -> str:
+    """전부 실패했을 때 사람이 할 일 하나."""
+    reasons = " ".join(s.reason for s in steps)
+    if "디스크" in reasons:
+        return "디스크 공간을 1GB 이상 비운 뒤 다시 실행하세요."
+    if "옮기지 못했습니다" in reasons:
+        return "녹화·송출을 끈 뒤 다시 실행하세요(쓰던 ffmpeg 가 잠겨 있음)."
+    net = kinds.count("net") + (1 if list_failed else 0)
+    if net and net >= max(1, len(kinds) - kinds.count("hash") - kinds.count("feature")):
+        if proxy:
+            return f"프록시 설정(HTTPS_PROXY={proxy})이 맞는지 확인한 뒤 다시 실행하세요."
+        return ("인터넷에 닿지 않습니다. 학교·회사망이면 HTTPS_PROXY 환경변수에 프록시 주소를 "
+                "넣고 다시 실행하세요. 아니면 인터넷 연결을 확인하세요.")
+    if kinds and all(k == "hash" for k in kinds):
+        return ("받는 도중 파일이 바뀝니다(보안 장비 등). 다른 망에서 받거나 USB 로 가져오세요: "
+                "zip 을 tools 폴더에 넣고 다시 실행.")
+    return ("다른 PC 에서 https://github.com/GyanD/codexffmpeg/releases 의 "
+            "*-essentials_build.zip 을 받아 USB 로 tools 폴더에 넣고 다시 실행하세요.")
+
+
+def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = False,
+         downloads: Path | None = None,
+         find: Callable[[], str] = None, pip: Callable[[], str] = None,
+         winget: Callable[[], WingetOutcome] = None, release: Callable[[], Result] = None,
+         from_zip: Callable[[Path], str] = None,
+         say: Callable[[str], None] = None) -> AutoResult:
+    say = say or _say
+    dest = Path(dest)
+    find = find or (lambda: find_usable(say=say))
+    pip = pip or (lambda: pip_install(say=say))
+    winget = winget or (lambda: winget_install(say=say))
+    release = release or (lambda: install(dest, say=say))
+    from_zip = from_zip or (lambda z: install_from_zip(z, dest, say=say))
+    r = AutoResult(False)
+    state = _state(state_path)
+
+    def done(name: str, exe: str) -> AutoResult:
+        r.steps.append(Step(name, "ok"))
+        r.ok, r.ffmpeg = True, exe
+        say(f"쓸 수 있는 ffmpeg: {exe}  ({name})")
+        return r
+
+    exe = find()
+    if exe:
+        return done("이미 있음", exe)
+    r.steps.append(Step("이미 있음", "fail", "쓸 수 있는 ffmpeg 없음"))
+
+    for z in offline_zips(dest):                    # tools 에 가져다 둔 zip 이 먼저
+        exe = from_zip(z)
+        if exe:
+            return done(f"가져온 zip ({z.name})", exe)
+        r.steps.append(Step(f"가져온 zip ({z.name})", "fail", "zip 으로 설치 실패"))
+
+    exe = pip()
+    if exe:
+        return done("pip (imageio-ffmpeg)", exe)
+    r.steps.append(Step("pip (imageio-ffmpeg)", "fail", "pip 설치 실패 또는 기능 부족"))
+
+    skip = (state.get("winget") or {}) if not retry_skipped else {}
+    if skip.get("skip"):
+        say(f"winget 은 건너뜁니다: {skip.get('reason')} (지난 실행에서 확인)")
+        r.steps.append(Step("winget", "skip", str(skip.get("reason", ""))))
+    else:
+        w = winget()
+        if w.ffmpeg:
+            return done("winget", w.ffmpeg)
+        r.steps.append(Step("winget", "fail", w.reason))
+        if w.permanent:
+            state["winget"] = {"skip": True, "reason": w.reason,
+                               "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            _save_state(state_path, state)
+
+    rel = release()
+    if rel.ok:
+        return done(f"릴리스 목록 ({rel.used.version if rel.used else ''})", rel.ffmpeg)
+    kinds = rel.kinds if len(rel.kinds) == len(rel.tried) else ["other"] * len(rel.tried)
+    for (v, why), kind in zip(rel.tried, kinds, strict=True):
+        r.steps.append(Step(f"릴리스 {v}", "fatal" if kind == "fatal" else "fail", why))
+    if any(k == "fatal" for k in rel.kinds):
+        r.next_action = next_action(r.steps, rel.kinds, list_failed=rel.list_failed)
+        return r
+
+    for z in offline_zips(downloads) if downloads else []:      # 마지막: 다운로드 폴더
+        exe = from_zip(z)
+        if exe:
+            return done(f"다운로드 폴더 zip ({z.name})", exe)
+        r.steps.append(Step(f"다운로드 폴더 zip ({z.name})", "fail", "zip 으로 설치 실패"))
+
+    r.next_action = next_action(r.steps, rel.kinds, list_failed=rel.list_failed,
+                                proxy=os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"))
+    return r
+
+
+def print_summary(r: AutoResult, say: Callable[[str], None] = None) -> None:
+    say = say or _say
+    if r.ok:
+        return
+    say("")
+    say("[X] ffmpeg 를 설치하지 못했습니다. 시도한 순서와 이유:")
+    for i, s in enumerate(r.steps, 1):
+        mark = {"skip": "건너뜀", "fatal": "중단"}.get(s.status, "실패")
+        say(f"  {i}. {s.name} — {mark}: {s.reason}")
+    say(f"다음 할 일: {r.next_action}")
 
 
 def find_usable(say: Callable[[str], None] = None) -> str:
@@ -354,11 +591,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--find", action="store_true",
                     help="이미 쓸 수 있는 ffmpeg 가 있으면 경로를 출력하고 0 (설치 안 함)")
     ap.add_argument("--pip", action="store_true", help="pip 의 imageio-ffmpeg 로 설치")
+    ap.add_argument("--auto", action="store_true",
+                    help="찾기 -> 가져온 zip -> pip -> winget -> 릴리스 목록 -> 다운로드 폴더 zip")
+    ap.add_argument("--retry-skipped", action="store_true",
+                    help="지난번에 '다시 해도 같음' 으로 건너뛴 winget 도 다시 시도")
+    ap.add_argument("--from-zip", help="가져온 zip 으로 설치(오프라인)")
+    ap.add_argument("--sha256", default="", help="--from-zip 의 SHA-256 (있으면 확인)")
     ap.add_argument("--dest", default=str(REPO_ROOT / "tools"))
     ap.add_argument("--max", type=int, default=6, help="롤백해 볼 릴리스 수 (기본 6)")
     ap.add_argument("--force", action="store_true", help="쓸 수 있는 ffmpeg 가 있어도 새로 받기")
     ap.add_argument("--dry-run", action="store_true", help="받지 않고 시도할 순서만 출력")
     a = ap.parse_args(argv)
+    if a.from_zip:
+        return 0 if install_from_zip(Path(a.from_zip), Path(a.dest), sha256=a.sha256) else 1
+    if a.auto:
+        downloads = Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads"
+        r = auto(Path(a.dest), state_path=Path(a.dest) / ".ffmpeg_install.json",
+                 retry_skipped=a.retry_skipped, downloads=downloads)
+        print_summary(r)
+        return 0 if r.ok else 1
     if a.find or a.pip:
         exe = find_usable() if a.find else pip_install()
         if exe:

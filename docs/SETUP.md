@@ -65,15 +65,19 @@ Eclass 수집을 쓸 때만 필요합니다. 약 150MB.
 scripts\install_ffmpeg.bat
 ```
 
-`setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 순서는 이렇습니다.
+`setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 실제 일은
+`python -m syncnote.ffmpeg_fetch --auto` 가 실패 원인을 보며 차례로 합니다.
 
 0. 이미 쓸 수 있는 ffmpeg 가 있으면 끝 — PATH, `FFMPEG`, `tools\ffmpeg`, winget 폴더, pip 순.
    녹화에 필요한 기능(gdigrab·libx264·aac)이 있는지도 봅니다.
 1. **pip 의 `imageio-ffmpeg`** (requirements.txt 에 있음). wheel 안에 ffmpeg 가 들어 있어
    관리자 권한·winget 없이 깔립니다. Windows 빌드는 gyan.dev essentials 9.0.2 로
    필요한 기능을 확인했습니다. `ffprobe` 는 없지만 녹화에는 필요 없습니다.
+   (그 전에 **`tools` 폴더에 가져다 둔 `ffmpeg*.zip`** 이 있으면 그것부터 씁니다 — 오프라인·USB.)
 2. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
    (`Do you agree ...? [Y]`)은 옵션으로 전부 자동 승인하므로 멈추지 않습니다.
+   winget 이 **없거나 정책으로 막혀 있으면** 다시 해도 같으므로 `tools\.ffmpeg_install.json`
+   에 적어 두고 다음부터 건너뜁니다(`--retry-skipped` 로 다시 시도).
 3. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
    (`python -m syncnote.ffmpeg_fetch`). winget 이 받아 오는 것과 같은 저장소
    [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases) 입니다.
@@ -84,7 +88,22 @@ scripts\install_ffmpeg.bat
    - 이미 있던 `tools\ffmpeg` 는 새 것이 다 확인된 뒤에만 바꾸고, 바꾸다 실패하면
      되돌려 놓습니다.
    - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 시도할 순서만 볼 수 있습니다.
-4. 파이썬조차 없을 때만 PowerShell 로 gyan.dev zip 을 받습니다.
+4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.
+5. 파이썬조차 없을 때만 winget → PowerShell 로 gyan.dev zip.
+
+전부 실패하면 **시도한 순서와 각각의 이유**, 그리고 원인에 맞는 **다음 할 일 하나**를
+출력합니다. 설치·점검 창에도 그 한 줄이 설치 단계 메모로 뜹니다.
+
+| 원인 | 다음 할 일 |
+|---|---|
+| 디스크 부족 | 공간 비우고 다시 |
+| 쓰던 ffmpeg 잠김 | 녹화·송출 끄고 다시 |
+| 인터넷에 안 닿음 | 학교·회사망이면 `HTTPS_PROXY` 설정 (설정돼 있으면 그 주소 확인) |
+| 해시가 계속 다름 | 다른 망에서, 또는 USB 로 zip 을 `tools` 에 |
+| 그 밖 | 다른 PC 에서 `*-essentials_build.zip` 을 받아 USB 로 `tools` 에 |
+
+가져온 zip 을 직접 지정할 수도 있습니다:
+`python -m syncnote.ffmpeg_fetch --from-zip D:\ffmpeg-9.1-essentials_build.zip [--sha256 …]`
 
 winget 은 PATH 를 바꾸지만 **이미 열린 창에는 반영되지 않습니다.** syncnote 는
 winget 이 둔 위치(`%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe`)를 직접 찾으므로

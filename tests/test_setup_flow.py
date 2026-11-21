@@ -786,3 +786,19 @@ def test_configured_mic_overrides_default_and_all_silent_means_permission(app, t
     mark, text = dlg.mic_status()
     assert mark == "X" and ("권한" in text or "개인 정보" in text)
     dlg.close()
+
+
+def test_ffmpeg_next_action_hint_reaches_the_install_note(app, tmp_path, fakes, monkeypatch):
+    (fakes / "venv").write_text("ok", encoding="utf-8")
+    (fakes / "installed").write_text("ok", encoding="utf-8")
+    (fakes / "no_ffmpeg").write_text("ok", encoding="utf-8")
+    hint = _py(tmp_path, "ffmpeg_hint", """
+        print("[X] ffmpeg 를 설치하지 못했습니다. 시도한 순서와 이유:")
+        print("다음 할 일: USB 로 zip 을 tools 폴더에 넣고 다시 실행하세요.")
+    """)
+    monkeypatch.setattr(SF.SetupFlow, "ffmpeg_command", lambda self: hint)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["install"] == "warn"
+    assert "다음 할 일: ffmpeg — USB 로 zip" in dlg.notes["install"]
+    dlg.close()

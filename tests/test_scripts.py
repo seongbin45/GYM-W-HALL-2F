@@ -191,8 +191,9 @@ def test_install_ffmpeg_uses_winget_without_prompts_then_falls_back_to_zip():
     # 결과는 PATH(이 창엔 반영 안 됨)가 아니라 winget 이 만든 파일로 확인
     assert r"WinGet\Links\ffmpeg.exe" in text and "Gyan.FFmpeg*" in text
     # 찾기 -> pip -> winget -> 릴리스 목록(롤백), 파이썬조차 없을 때만 PowerShell zip
-    assert (text.index("ffmpeg_fetch --find") < text.index("ffmpeg_fetch --pip")
-            < text.index("winget install"))
+    # 파이썬이 있으면 --auto 가 전부(찾기·zip·pip·winget·릴리스) 맡고, 없을 때만 bat 의 길
+    assert text.index("ffmpeg_fetch --auto") < text.index(":nopython") < text.index(
+        "winget install")
     assert (text.index("winget install") < text.index("syncnote.ffmpeg_fetch --dest")
             < text.index("Invoke-WebRequest"))
     assert "errorlevel 9009" in text
