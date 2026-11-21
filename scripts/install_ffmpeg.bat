@@ -1,11 +1,13 @@
 @echo off
 REM =====================================================================
 REM  ffmpeg 설치.  setup.bat 이 ffmpeg 가 없을 때 부릅니다.
-REM    1) winget install Gyan.FFmpeg  (동의 질문은 옵션으로 모두 자동 'Y')
-REM    2) winget 이 없거나 실패하면 실제 릴리스 목록(GyanD/codexffmpeg)에서
+REM    0) 이미 쓸 수 있는 ffmpeg 가 있으면 끝 (PATH·tools·winget·pip, 필요 기능 확인)
+REM    1) pip 의 imageio-ffmpeg (ffmpeg 동봉, 관리자 권한·winget 불필요)
+REM    2) winget install Gyan.FFmpeg  (동의 질문은 옵션으로 모두 자동 'Y')
+REM    3) winget 이 없거나 실패하면 실제 릴리스 목록(GyanD/codexffmpeg)에서
 REM       새 버전부터 받아 tools\ffmpeg 에 둠. 해시·필요 기능 확인에 실패하면
 REM       이전 릴리스로 롤백 (python -m syncnote.ffmpeg_fetch)
-REM    3) 파이썬조차 없으면 gyan.dev zip 을 PowerShell 로 직접 내려받음
+REM    4) 파이썬조차 없으면 gyan.dev zip 을 PowerShell 로 직접 내려받음
 REM  winget 은 PATH 를 바꾸지만 지금 열린 창에는 반영되지 않습니다. 그래서
 REM  설치 결과는 PATH 가 아니라 winget 이 만든 파일 위치로 확인합니다
 REM  (syncnote 도 같은 위치를 찾으므로 창을 다시 열지 않아도 됩니다).
@@ -16,11 +18,23 @@ set "ZIP=%TEMP%\ffmpeg-syncnote.zip"
 set "DEST=%REPO%\tools"
 set "WG_LINK=%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"
 
+"%PY%" -m syncnote.ffmpeg_fetch --find
+if not errorlevel 1 exit /b 0
+REM 9009 = 파이썬 없음 -> 파이썬이 필요한 단계(찾기·pip·릴리스)는 건너뜀
+if errorlevel 9009 goto :nopython
+"%PY%" -m syncnote.ffmpeg_fetch --pip
+if not errorlevel 1 exit /b 0
+echo [!] pip 로 설치하지 못했습니다. winget 으로 시도합니다.
+goto :winget
+
+:nopython
 call :winget_found
 if not errorlevel 1 (
     echo 이미 winget 으로 설치돼 있습니다: %WG_FOUND%
     exit /b 0
 )
+
+:winget
 
 where winget >nul 2>&1
 if errorlevel 1 (

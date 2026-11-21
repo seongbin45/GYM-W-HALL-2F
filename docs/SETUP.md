@@ -67,9 +67,14 @@ scripts\install_ffmpeg.bat
 
 `setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 순서는 이렇습니다.
 
-1. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
+0. 이미 쓸 수 있는 ffmpeg 가 있으면 끝 — PATH, `FFMPEG`, `tools\ffmpeg`, winget 폴더, pip 순.
+   녹화에 필요한 기능(gdigrab·libx264·aac)이 있는지도 봅니다.
+1. **pip 의 `imageio-ffmpeg`** (requirements.txt 에 있음). wheel 안에 ffmpeg 가 들어 있어
+   관리자 권한·winget 없이 깔립니다. Windows 빌드는 gyan.dev essentials 9.0.2 로
+   필요한 기능을 확인했습니다. `ffprobe` 는 없지만 녹화에는 필요 없습니다.
+2. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
    (`Do you agree ...? [Y]`)은 옵션으로 전부 자동 승인하므로 멈추지 않습니다.
-2. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
+3. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
    (`python -m syncnote.ffmpeg_fetch`). winget 이 받아 오는 것과 같은 저장소
    [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases) 입니다.
    - 순서: 정식 버전 새 것부터(9.1 → 9.0.2 → …) → 날짜별 git 빌드 → gyan.dev
@@ -79,7 +84,7 @@ scripts\install_ffmpeg.bat
    - 이미 있던 `tools\ffmpeg` 는 새 것이 다 확인된 뒤에만 바꾸고, 바꾸다 실패하면
      되돌려 놓습니다.
    - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 시도할 순서만 볼 수 있습니다.
-3. 파이썬조차 없을 때만 PowerShell 로 gyan.dev zip 을 받습니다.
+4. 파이썬조차 없을 때만 PowerShell 로 gyan.dev zip 을 받습니다.
 
 winget 은 PATH 를 바꾸지만 **이미 열린 창에는 반영되지 않습니다.** syncnote 는
 winget 이 둔 위치(`%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe`)를 직접 찾으므로

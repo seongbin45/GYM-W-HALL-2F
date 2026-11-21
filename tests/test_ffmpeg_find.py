@@ -16,6 +16,7 @@ def no_path_ffmpeg(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "exists", lambda self: False if "tools" in self.parts
                         and "ffmpeg" in str(self) else real_exists(self))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(F, "pip_ffmpeg", lambda: None)              # pip 쪽은 따로 시험
     return tmp_path / "Microsoft" / "WinGet"
 
 
@@ -25,10 +26,11 @@ def _touch(p: Path) -> Path:
     return p
 
 
-def test_missing_everywhere_raises_with_winget_hint(no_path_ffmpeg):
+def test_missing_everywhere_raises_with_install_hint(no_path_ffmpeg):
     with pytest.raises(F.FFmpegMissing) as exc:
         F.find_ffmpeg()
-    assert "winget install Gyan.FFmpeg" in str(exc.value)
+    msg = str(exc.value)
+    assert "install_ffmpeg.bat" in msg and "pip" in msg and "winget" in msg
 
 
 def test_finds_winget_link_without_path(no_path_ffmpeg):

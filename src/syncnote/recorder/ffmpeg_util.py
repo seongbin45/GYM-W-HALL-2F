@@ -8,6 +8,7 @@ ffmpeg 를 쓰는 이유:
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ class FFmpegMissing(Exception):
     def __str__(self) -> str:
         return (
             "ffmpeg 를 찾지 못했습니다.\n"
-            "  1) scripts\\install_ffmpeg.bat 실행 (winget install Gyan.FFmpeg, 안 되면 zip)\n"
+            "  1) scripts\\install_ffmpeg.bat 실행 (pip -> winget -> 릴리스 목록 순으로 설치)\n"
             "  2) 또는 https://www.gyan.dev/ffmpeg/builds/ 에서 받아 bin 폴더를 PATH 에\n"
             "  3) 또는 환경변수 FFMPEG 에 ffmpeg.exe 전체 경로를 넣으세요."
         )
@@ -41,10 +42,42 @@ def find_ffmpeg() -> str:
         p = here / rel
         if p.exists():
             return str(p)
-    found = _winget_ffmpeg()
+    found = _winget_ffmpeg() or pip_ffmpeg()
     if found:
         return found
     raise FFmpegMissing()
+
+
+def reset_cache() -> None:
+    """pip 설치 직후처럼 찾은 결과를 다시 봐야 할 때."""
+    pip_ffmpeg.cache_clear()
+
+
+@functools.lru_cache(maxsize=1)
+def pip_ffmpeg() -> str | None:
+    """pip 의 imageio-ffmpeg 가 동봉한 ffmpeg — 녹화에 필요한 기능이 있을 때만.
+
+    우리가 고른 빌드가 아니라서(버전이 바뀌면 빌드도 바뀔 수 있음) 쓰기 전에
+    gdigrab·libx264·aac 를 확인합니다. 실행이 들어가므로 프로세스당 한 번만.
+    """
+    try:
+        import imageio_ffmpeg  # noqa: PLC0415 — 없으면 이 경로만 건너뜀
+    except ImportError:
+        return None
+    try:
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 — 플랫폼에 맞는 바이너리가 없음 등
+        return None
+    if not exe or not Path(exe).exists():
+        return None
+    from ..ffmpeg_fetch import missing_features  # noqa: PLC0415 — 순환 import 회피
+
+    lack = missing_features(Path(exe))
+    if lack:
+        log.warning("pip 의 ffmpeg(%s)에 녹화에 필요한 기능이 없어 쓰지 않습니다: %s",
+                    exe, ", ".join(lack))
+        return None
+    return exe
 
 
 def _winget_ffmpeg() -> str | None:

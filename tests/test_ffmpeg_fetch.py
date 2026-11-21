@@ -134,8 +134,9 @@ def test_extract_rejects_paths_that_escape(tmp_path):
 def test_missing_features_reads_ffmpeg_output(tmp_path):
     exe = tmp_path / "ffmpeg.exe"
     exe.write_bytes(b"nogdi")
-    assert F.missing_features(exe, run=runner({"nogdi": ["gdigrab", "libx264"]})) == [
-        "gdigrab", "libx264"]
+    got = F.missing_features(exe, run=runner({"nogdi": ["gdigrab", "libx264"]}))
+    # 화면 캡처(gdigrab)는 Windows 에서만 필요
+    assert got == (["gdigrab", "libx264"] if F.os.name == "nt" else ["libx264"])
     assert F.missing_features(tmp_path / "gone.exe") == ["실행 안 됨"]
 
 
@@ -157,11 +158,11 @@ def test_rolls_back_to_older_release_until_one_works(tmp_path):
                      ("9.0.2", _zip(marker=b"v902"), None),               # 기능 없음
                      ("9.0", _zip(marker=b"v90"), None))                  # 정상
     logs = []
-    r = F.install(tmp_path, opener=opener_for(routes), run=runner({"v902": ["gdigrab"]}),
+    r = F.install(tmp_path, opener=opener_for(routes), run=runner({"v902": ["libx264"]}),
                   sleep=lambda _s: None, say=logs.append)
     assert r.ok and r.used.version == "9.0"
     assert [v for v, _ in r.tried] == ["9.1", "9.0.2"]
-    assert "SHA-256" in r.tried[0][1] and "gdigrab" in r.tried[1][1]
+    assert "SHA-256" in r.tried[0][1] and "libx264" in r.tried[1][1]
     assert (tmp_path / "ffmpeg" / "bin" / "ffmpeg.exe").read_bytes() == b"v90"
     assert any("롤백: 9.0.2" in m for m in logs) and any("롤백: 9.0" in m for m in logs)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ffmpeg"]      # 임시 폴더 정리
@@ -226,3 +227,65 @@ def test_disk_full_stops_instead_of_trying_older_releases(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "open", full)
     r = F.install(tmp_path, opener=opener_for(routes), run=runner(), say=lambda _m: None)
     assert not r.ok and len(r.tried) == 1 and "디스크" in r.tried[0][1]
+
+
+# -- pip(imageio-ffmpeg) 경로 --------------------------------------------------
+def _fake_imageio(monkeypatch, exe):
+    import sys
+    import types as _t
+
+    mod = _t.ModuleType("imageio_ffmpeg")
+    mod.get_ffmpeg_exe = lambda: str(exe)
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", mod)
+
+
+def test_pip_ffmpeg_used_only_when_it_has_needed_features(tmp_path, monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    exe = tmp_path / "ffmpeg-win-x86_64-v9.0.2.exe"
+    exe.write_bytes(b"x")
+    _fake_imageio(monkeypatch, exe)
+    U.reset_cache()
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: [])
+    assert U.pip_ffmpeg() == str(exe)
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: ["libx264"])
+    assert U.pip_ffmpeg() == str(exe)                                   # 프로세스당 한 번(캐시)
+    U.reset_cache()
+    assert U.pip_ffmpeg() is None                                        # 기능 없음 -> 안 씀
+    U.reset_cache()
+
+
+def test_pip_ffmpeg_absent_module_is_skipped(monkeypatch):
+    import sys
+
+    from syncnote.recorder import ffmpeg_util as U
+
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)            # import 실패
+    U.reset_cache()
+    assert U.pip_ffmpeg() is None
+    U.reset_cache()
+
+
+def test_pip_install_reports_failure_and_rechecks_after_success(monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    calls = []
+    fail = lambda cmd, **k: calls.append(cmd) or types.SimpleNamespace(returncode=1)  # noqa: E731
+    assert F.pip_install(run=fail, say=lambda _m: None) == ""
+    assert calls[0][1:4] == ["-m", "pip", "install"] and "imageio-ffmpeg>=0.5" in calls[0]
+    resets = []
+    monkeypatch.setattr(U, "reset_cache", lambda: resets.append(1))
+    monkeypatch.setattr(U, "pip_ffmpeg", lambda: "C:/site/ffmpeg.exe")
+    ok = lambda cmd, **k: types.SimpleNamespace(returncode=0)  # noqa: E731
+    assert F.pip_install(run=ok, say=lambda _m: None) == "C:/site/ffmpeg.exe" and resets
+
+
+def test_find_usable_rejects_a_found_ffmpeg_without_features(monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    monkeypatch.setattr(U, "find_ffmpeg", lambda: "C:/old/ffmpeg.exe")
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: ["libx264"])
+    logs = []
+    assert F.find_usable(say=logs.append) == "" and "FFMPEG" in logs[0]
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: [])
+    assert F.find_usable(say=logs.append) == "C:/old/ffmpeg.exe"

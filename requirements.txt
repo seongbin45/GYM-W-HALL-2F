@@ -30,6 +30,11 @@ playwright>=1.44,<1.65
 numpy>=1.24
 soundcard>=0.4.3
 psutil>=5.9             # 프로그램 감지 트리거 (없으면 tasklist 로 대체)
+#  ffmpeg 첫 번째 설치 경로: wheel 안에 ffmpeg 실행 파일이 들어 있어 관리자 권한·
+#  winget 없이 pip 만으로 깔립니다(Windows 는 gyan.dev essentials 빌드 —
+#  gdigrab·ddagrab·libx264·aac 확인함). ffprobe 는 없습니다(없어도 녹화는 됨).
+#  이것이 안 되면 install_ffmpeg.bat 이 winget -> 릴리스 목록 순으로 받습니다.
+imageio-ffmpeg>=0.5
 
 # ---------------------------------------------------------------------
 #  음성 전사

@@ -47,7 +47,15 @@ GYAN_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 USER_AGENT = "syncnote-setup"
 ASSET_SUFFIX = "-essentials_build.zip"      # 녹화에 필요한 것은 다 있고 full 의 절반 크기
 BACKOFF = (2, 4, 8)
+# 녹화에 꼭 필요한 것. 화면 캡처(gdigrab)는 Windows 녹화기에서만 씁니다.
 NEEDED = {"gdigrab": "-devices", "libx264": "-encoders", "aac": "-encoders"}
+if os.name != "nt":
+    NEEDED = {k: v for k, v in NEEDED.items() if k != "gdigrab"}
+
+
+def _say(msg: str) -> None:
+    """바로 내보냅니다 — bat 창에서 pip·다운로드 출력과 순서가 섞이지 않게."""
+    print(msg, flush=True)
 
 
 class Fatal(Exception):
@@ -145,8 +153,9 @@ def _raise_if_disk_full(exc: OSError) -> None:
 
 
 def download(c: Candidate, dest: Path, *, opener: Callable = _open,
-             sleep: Callable[[float], None] = time.sleep, say: Callable[[str], None] = print) -> Path:
+             sleep: Callable[[float], None] = time.sleep, say: Callable[[str], None] = None) -> Path:
     """dest 로 받고 SHA-256 을 확인합니다. 일시적 오류만 2·4·8 초 뒤 다시."""
+    say = say or _say
     part = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(len(BACKOFF) + 1):
         h = hashlib.sha256()
@@ -252,7 +261,8 @@ def swap_in(new_dir: Path, dest: Path) -> Path:
 def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             opener: Callable = _open, run: Callable = subprocess.run,
             sleep: Callable[[float], None] = time.sleep,
-            say: Callable[[str], None] = print) -> Result:
+            say: Callable[[str], None] = None) -> Result:
+    say = say or _say
     dest = Path(dest)
     current = dest / "ffmpeg" / "bin" / "ffmpeg.exe"
     if current.exists() and not force and not missing_features(current, run=run):
@@ -298,14 +308,62 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
     return result
 
 
+def find_usable(say: Callable[[str], None] = None) -> str:
+    """0단계: 이미 쓸 수 있는 ffmpeg 가 있나(PATH·FFMPEG·tools·winget·pip). 없으면 ''."""
+    say = say or _say
+    from .recorder.ffmpeg_util import FFmpegMissing, find_ffmpeg
+
+    try:
+        exe = find_ffmpeg()
+    except FFmpegMissing:
+        return ""
+    lack = missing_features(Path(exe))
+    if lack:
+        say(f"[!] 찾은 ffmpeg 에 녹화에 필요한 기능이 없습니다({', '.join(lack)}): {exe}\n"
+            "    새로 설치해도 이것이 먼저 잡히면 쓰이지 않습니다. PATH 에서 빼거나\n"
+            "    환경변수 FFMPEG 에 새 ffmpeg.exe 경로를 넣으세요.")
+        return ""
+    return exe
+
+
+def pip_install(*, run: Callable = subprocess.run, say: Callable[[str], None] = None) -> str:
+    """1단계: pip 의 imageio-ffmpeg(ffmpeg 실행 파일 동봉). 쓸 수 있으면 그 경로, 아니면 ''."""
+    say = say or _say
+    from .recorder import ffmpeg_util
+
+    say("pip 로 imageio-ffmpeg 를 설치합니다... (약 40MB)")
+    try:
+        p = run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                 "imageio-ffmpeg>=0.5"], timeout=900)
+    except (OSError, subprocess.SubprocessError) as exc:
+        say(f"      [X] pip 를 실행하지 못했습니다: {exc}")
+        return ""
+    if p.returncode != 0:
+        say(f"      [X] pip 설치 실패 (종료 코드 {p.returncode})")
+        return ""
+    ffmpeg_util.reset_cache()
+    exe = ffmpeg_util.pip_ffmpeg()
+    if not exe:
+        say("      [X] 설치는 됐지만 쓸 수 있는 ffmpeg 가 없습니다(필요 기능 부족 등)")
+    return exe or ""
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m syncnote.ffmpeg_fetch",
                                  description="릴리스 목록에서 ffmpeg 를 받아 tools\\ffmpeg 에 둡니다")
+    ap.add_argument("--find", action="store_true",
+                    help="이미 쓸 수 있는 ffmpeg 가 있으면 경로를 출력하고 0 (설치 안 함)")
+    ap.add_argument("--pip", action="store_true", help="pip 의 imageio-ffmpeg 로 설치")
     ap.add_argument("--dest", default=str(REPO_ROOT / "tools"))
     ap.add_argument("--max", type=int, default=6, help="롤백해 볼 릴리스 수 (기본 6)")
     ap.add_argument("--force", action="store_true", help="쓸 수 있는 ffmpeg 가 있어도 새로 받기")
     ap.add_argument("--dry-run", action="store_true", help="받지 않고 시도할 순서만 출력")
     a = ap.parse_args(argv)
+    if a.find or a.pip:
+        exe = find_usable() if a.find else pip_install()
+        if exe:
+            print(f"쓸 수 있는 ffmpeg: {exe}")
+        return 0 if exe else 1
     if a.dry_run:
         cands = candidates(fetch_releases())[:a.max] + [gyan_candidate()]
         for i, c in enumerate(cands, 1):
