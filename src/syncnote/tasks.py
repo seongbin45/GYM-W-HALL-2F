@@ -251,9 +251,31 @@ def _lock_path() -> Path:
     return _stamp_path().with_name("tasks_register.lock")
 
 
+def _holder_dead(lock: Path) -> bool:
+    """잠금을 쥔 PID 가 확실히 죽었나. 못 읽거나 모르면 False(살아 있다고 보고 기다림)."""
+    try:
+        holder = lock.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not holder.isdigit():
+        return True                     # PID 를 못 읽는 잠금은 치워도 됨(옛 형식·깨짐)
+    pid = int(holder)
+    if pid == os.getpid():
+        return False                    # 내 잠금(있을 리 없지만) 은 치우지 않음
+    try:
+        from .recorder import lock as _rec_lock
+        return not _rec_lock._pid_exists(pid)     # 커널에 물어 '그런 PID 없음' 이면 죽은 것
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _acquire(wait_sec: float) -> bool:
     """등록을 한 번에 하나만(로그온 때 여러 명령이 동시에 뒤에서 띄우고, setup 도 같이 돎).
-    register_tasks.ps1 은 같은 이름의 작업을 지웠다 다시 만들어서 겹치면 서로 실패합니다."""
+    register_tasks.ps1 은 같은 이름의 작업을 지웠다 다시 만들어서 겹치면 서로 실패합니다.
+
+    잠금을 쥔 프로세스가 죽어 잠금만 남은 경우(크래시·강제 종료 — finally 가 안 돎)를 **바로**
+    알아채 치웁니다. 예전에는 시간(LOCK_STALE_SEC)으로만 봐서, 죽은 PID 가 남긴 잠금 때문에
+    setup.bat 의 작업 등록이 최대 300초 멈췄다가 등록도 못 하고 끝났습니다(GYM-W-HALL-2F 에서 실제)."""
     lock = _lock_path()
     deadline = time.time() + wait_sec
     while True:
@@ -264,11 +286,16 @@ def _acquire(wait_sec: float) -> bool:
             os.close(fd)
             return True
         except FileExistsError:
+            # 쥔 PID 가 죽었거나(바로), 너무 오래됐으면(백스톱) 치우고 다시 시도
             try:
-                if time.time() - lock.stat().st_mtime > LOCK_STALE_SEC:   # 죽은 프로세스가 남김
-                    lock.unlink()
-                    continue
+                stale = _holder_dead(lock) or (time.time() - lock.stat().st_mtime > LOCK_STALE_SEC)
             except OSError:
+                continue                 # 방금 사라짐 — 다시 시도
+            if stale:
+                try:
+                    lock.unlink()
+                except OSError:
+                    pass
                 continue
         except OSError:
             return True                 # 잠금 파일을 못 만들면 그냥 진행(등록을 막지 않음)

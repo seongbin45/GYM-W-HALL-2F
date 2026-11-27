@@ -157,6 +157,48 @@ def test_only_one_registration_at_a_time(stamps):
     T._release()
 
 
+def test_a_dead_holders_lock_is_stolen_immediately(stamps, monkeypatch):
+    """크래시·강제 종료로 잠금만 남은 경우(쥔 PID 가 죽음): 시간을 기다리지 않고 바로 뺏음.
+    GYM-W-HALL-2F 에서 죽은 PID 가 남긴 잠금 때문에 setup.bat 작업 등록이 멈췄던 회귀."""
+    from syncnote.recorder import lock as rec_lock
+
+    lock = T._lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("4294967000", encoding="utf-8")        # 존재할 리 없는 PID
+    monkeypatch.setattr(rec_lock, "_pid_exists", lambda pid: pid != 4294967000)
+    t0 = time.time()
+    assert T._acquire(300) is True                          # 바로 뺏어야 함(300초 기다리지 않음)
+    assert time.time() - t0 < 5
+    T._release()
+
+
+def test_a_live_holders_lock_is_not_stolen(stamps, monkeypatch):
+    from syncnote.recorder import lock as rec_lock
+
+    lock = T._lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("12345", encoding="utf-8")
+    monkeypatch.setattr(rec_lock, "_pid_exists", lambda pid: True)   # 살아 있음
+    assert T._acquire(0) is False                           # 뺏지 않고 포기
+    assert lock.exists()
+
+
+@pytest.mark.parametrize("content,pid_alive,dead", [
+    ("99999", False, True),            # 죽은 PID → 치움
+    ("99999", True, False),            # 산 PID → 둠
+    ("garbage", True, True),           # PID 아님 → 치움(옛 형식)
+    ("", True, True),                  # 빈 잠금 → 치움
+])
+def test_holder_dead_logic(stamps, monkeypatch, content, pid_alive, dead):
+    from syncnote.recorder import lock as rec_lock
+
+    monkeypatch.setattr(rec_lock, "_pid_exists", lambda pid: pid_alive)
+    lock = T._lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(content, encoding="utf-8")
+    assert T._holder_dead(lock) is dead
+
+
 # --- 모든 명령의 시작에서 -----------------------------------------------------
 
 def test_background_check_is_throttled(stamps, monkeypatch):
