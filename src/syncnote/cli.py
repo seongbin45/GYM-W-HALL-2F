@@ -204,7 +204,8 @@ def _doctor(args, rep: dict) -> int:
     print("\n  외부 도구")
     tools = section("외부 도구")
     try:
-        from .recorder.ffmpeg_util import find_ffmpeg, find_ffprobe, version as _ffver
+        from .recorder.ffmpeg_util import find_ffmpeg, find_ffprobe
+        from .recorder.ffmpeg_util import version as _ffver
 
         ff = find_ffmpeg()
         ver = _ffver(ff)

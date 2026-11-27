@@ -32,7 +32,7 @@ class MuxInput:
 
 
 def _write_muxfail_log(out_path: Path, cmd: list[str], exc: FfmpegError,
-                       video: Path | None, audio: list["MuxInput"],
+                       video: Path | None, audio: list[MuxInput],
                        track_names: list[str]) -> None:
     """합치기 실패 시 원인 캐기용 사이드카(<파일>.muxfail.log). 실패해도 조용히."""
     import datetime as _dt
