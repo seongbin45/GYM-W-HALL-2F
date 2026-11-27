@@ -29,6 +29,22 @@ class FFmpegMissing(Exception):
         )
 
 
+class FfmpegError(RuntimeError):
+    """ffmpeg 가 0 이 아닌 코드로 끝났을 때.
+
+    RuntimeError 의 하위라 기존 `except RuntimeError` · `str(exc)` 는 그대로
+    동작합니다(메시지 형식도 바꾸지 않습니다). 다만 **전체** stderr 와 실행한
+    명령을 속성으로 들고 다녀, 실패를 진단할 때 로그에 남은 15줄 꼬리 말고
+    원본 전체를 꺼내 파일로 떨궈 둘 수 있게 합니다.
+    """
+
+    def __init__(self, message: str, *, returncode: int, stderr: str, cmd: list[str]) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr
+        self.cmd = list(cmd)
+
+
 def find_ffmpeg() -> str:
     for candidate in (os.environ.get("FFMPEG"), "ffmpeg", "ffmpeg.exe"):
         if not candidate:
@@ -126,8 +142,13 @@ def run(args: list[str], *, timeout: float | None = None, check: bool = True) ->
         errors="replace", timeout=timeout, creationflags=_creationflags(),
     )
     if check and proc.returncode != 0:
-        tail = "\n".join((proc.stderr or "").strip().splitlines()[-15:])
-        raise RuntimeError(f"ffmpeg 실패 (code {proc.returncode}):\n{tail}")
+        full = proc.stderr or ""
+        tail = "\n".join(full.strip().splitlines()[-15:])
+        # 메시지는 그대로(로그·테스트 호환). 전체 stderr·명령은 속성으로 전달.
+        raise FfmpegError(
+            f"ffmpeg 실패 (code {proc.returncode}):\n{tail}",
+            returncode=proc.returncode, stderr=full, cmd=list(args),
+        )
     return proc
 
 
@@ -175,6 +196,31 @@ def read_stderr_log(path: Path | None, lines: int = 10) -> str:
     except OSError:
         return ""
     return "\n".join(text.strip().splitlines()[-lines:])
+
+
+def version(exe: str | None = None) -> str:
+    """ffmpeg 첫 줄의 버전 문자열(예: '4.4.1'). 못 읽으면 ''.
+
+    doctor 가 '어떤 ffmpeg 를 쓰는지' 를 경로와 함께 보여 주기 위함입니다.
+    경로만으로는 PATH 에 걸린 제3자(예: DocZoom 2018)·오래된 빌드를 분간할
+    수 없습니다.
+    """
+    exe = exe or find_ffmpeg()
+    try:
+        proc = subprocess.run(
+            [exe, "-hide_banner", "-version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15, creationflags=_creationflags(),
+        )
+    except Exception:
+        return ""
+    first = (proc.stdout or proc.stderr or "").splitlines()
+    if not first:
+        return ""
+    # "ffmpeg version 4.4.1-..." -> "4.4.1-..."
+    parts = first[0].split()
+    if len(parts) >= 3 and parts[0] == "ffmpeg" and parts[1] == "version":
+        return parts[2]
+    return first[0].strip()
 
 
 def duration_of(path: Path) -> float | None:

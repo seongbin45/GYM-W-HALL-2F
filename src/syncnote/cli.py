@@ -204,10 +204,14 @@ def _doctor(args, rep: dict) -> int:
     print("\n  외부 도구")
     tools = section("외부 도구")
     try:
-        from .recorder.ffmpeg_util import find_ffmpeg, find_ffprobe
+        from .recorder.ffmpeg_util import find_ffmpeg, find_ffprobe, version as _ffver
 
-        print(f"    [O] ffmpeg           {find_ffmpeg()}")
-        tools.append({"mark": "O", "name": "ffmpeg", "detail": str(find_ffmpeg())})
+        ff = find_ffmpeg()
+        ver = _ffver(ff)
+        # 경로만 보면 PATH 에 걸린 제3자/오래된 ffmpeg(예: DocZoom 2018)를 못 가립니다.
+        suffix = f"  (버전 {ver})" if ver else ""
+        print(f"    [O] ffmpeg           {ff}{suffix}")
+        tools.append({"mark": "O", "name": "ffmpeg", "detail": f"{ff}{suffix}"})
         probe = find_ffprobe()
         print(f"    {'[O]' if probe else '[-]'} ffprobe          {probe or '없음(길이 계산만 영향)'}")
         tools.append({"mark": "O" if probe else "-", "name": "ffprobe",
@@ -302,6 +306,19 @@ def _doctor(args, rep: dict) -> int:
         mark = "[O]" if where != "없음" else "[-]"
         print(f"    {mark} {name:<16} {where}")
         creds.append({"mark": mark[1], "name": name, "detail": where})
+
+    # github 토큰은 '있다' 로 끝내지 않고 실제로 GitHub 에 물어봅니다.
+    # 존재 != 유효 — 만료된 토큰이 [O] 로 보이면 업로드가 전멸인데도 doctor 가
+    # '모두 정상' 이라고 합니다(실측된 증상). GET /user 한 번.
+    # --json(편집기 폴링)에서는 매번 네트워크를 타지 않도록 건너뜁니다.
+    if not getattr(args, "json", False):
+        from .release import check_token
+
+        tmark, detail = check_token()
+        print(f"    [{tmark}] github 유효성     {detail}")
+        creds.append({"mark": tmark, "name": "github 유효성", "detail": detail})
+        if tmark == "X":
+            ok = False
 
     # 오디오 장치
     if cfg.get("recording.audio.enabled"):

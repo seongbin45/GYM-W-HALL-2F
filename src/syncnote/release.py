@@ -38,6 +38,52 @@ class ReleaseError(Exception):
     pass
 
 
+def check_token(token: str | None = None) -> tuple[str, str]:
+    """설정된 GitHub 토큰이 '실제로' 통하는지 GitHub 에 물어봅니다.
+
+    doctor 가 '토큰이 있다' 로 끝내지 않게(존재 != 유효) 쓰는 가벼운 점검.
+    GET /user 한 번. 반환 (mark, detail):
+      'O' 유효 · 'X' 거절/권한부족(=반드시 조치) · '!' 확인 불가(오프라인이거나
+      이 세션에서 토큰이 안 보임). 'X' 만 doctor 를 실패로 봅니다 — 오프라인에서
+      거짓 실패를 내지 않기 위함입니다.
+    """
+    if token is None:
+        token = secrets.get("github", required=False) or ""
+    if not token:
+        return ("!", "이 세션에서 토큰이 안 보입니다 — 대화형 로그온에서 넣었다면 "
+                     "SSH/원격 세션엔 안 보일 수 있습니다. 녹화 PC 본체에서 확인하세요")
+    try:
+        import requests  # type: ignore
+    except ImportError:
+        return ("!", "requests 없음 — 유효성 확인 못함")
+    try:
+        resp = requests.get(
+            f"{API}/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "sync-note",
+            },
+            timeout=15,
+        )
+    except Exception as exc:  # 네트워크/타임아웃 — 토큰 탓이 아님
+        return ("!", f"GitHub 에 못 닿음({exc.__class__.__name__}) — 오프라인? 유효성 확인 못함")
+    if resp.status_code == 200:
+        login = ""
+        try:
+            login = (resp.json() or {}).get("login", "")
+        except Exception:
+            pass
+        scopes = resp.headers.get("X-OAuth-Scopes", "")
+        extra = f", 권한범위: {scopes}" if scopes else ""
+        return ("O", f"유효함(계정 {login or '?'}{extra})")
+    if resp.status_code in (401, 403):
+        return ("X", f"토큰 거절됨({resp.status_code}) — 만료됐거나 권한이 모자랍니다. "
+                     "python -m syncnote secrets set github 로 갱신하세요")
+    return ("!", f"확인 불가(HTTP {resp.status_code})")
+
+
 # ---------------------------------------------------------------------------
 # 에셋 이름
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..logging_setup import get as get_logger
-from .ffmpeg_util import find_ffmpeg, run
+from .ffmpeg_util import FfmpegError, duration_of, find_ffmpeg, run
 
 log = get_logger("recorder.mux")
 
@@ -29,6 +29,44 @@ class MuxInput:
     path: Path
     name: str          # "system" | "mic"
     started_at: float  # time.time() 기준
+
+
+def _write_muxfail_log(out_path: Path, cmd: list[str], exc: FfmpegError,
+                       video: Path | None, audio: list["MuxInput"],
+                       track_names: list[str]) -> None:
+    """합치기 실패 시 원인 캐기용 사이드카(<파일>.muxfail.log). 실패해도 조용히."""
+    import datetime as _dt
+
+    sidecar = out_path.with_suffix(out_path.suffix + ".muxfail.log")
+    try:
+        lines = [
+            f"# 합치기 실패 {_dt.datetime.now().isoformat(timespec='seconds')}",
+            f"# 결과(목표): {out_path}",
+            f"# ffmpeg 종료코드: {exc.returncode}",
+            f"# 트랙: {', '.join(track_names) or '없음'}",
+            "",
+            "## 입력",
+        ]
+        if video is not None:
+            sz = video.stat().st_size if video.exists() else -1
+            lines.append(f"  video {video}  ({sz} B, {duration_of(video)} s)")
+        for a in audio:
+            sz = a.path.stat().st_size if a.path.exists() else -1
+            lines.append(f"  {a.name:<8} {a.path}  ({sz} B, {duration_of(a.path)} s)")
+        lines += [
+            "",
+            "## 실행한 명령",
+            " ".join(cmd),
+            "",
+            "## ffmpeg stderr (전체)",
+            exc.stderr.rstrip() or "(비어 있음)",
+            "",
+        ]
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text("\n".join(lines), encoding="utf-8")
+        log.error("합치기 실패 상세를 남겼습니다: %s", sidecar)
+    except Exception as e:   # 진단 로그 쓰기가 본류를 망치면 안 됨
+        log.warning("합치기 실패 상세 기록 실패: %s", e)
 
 
 def mux(
@@ -181,6 +219,13 @@ def mux(
     log.info("합치는 중 -> %s (트랙: %s)", out_path.name, ", ".join(out_track_names) or "없음")
     try:
         run(cmd, timeout=3600)
+    except FfmpegError as exc:
+        # 실패 원인을 다음 번에도 캐낼 수 있게 전체 stderr·명령·입력을 파일로.
+        # 앱 로그에는 꼬리 15줄만 남고 그마저 회전돼 사라집니다. 실제로 한 번
+        # 일어난 '합치기 실패(code 1) -> 영상만' 의 원인을 끝내 모른 건 전체
+        # stderr 가 어디에도 안 남아서였습니다.
+        _write_muxfail_log(out_path, cmd, exc, video, audio, out_track_names)
+        raise
     finally:
         if meta_file is not None:
             meta_file.unlink(missing_ok=True)
