@@ -18,6 +18,7 @@ from syncnote.release import (
     ReleaseError,
     ReleaseUploader,
     asset_name,
+    check_token,
     split_file,
     tag_for,
 )
@@ -1053,3 +1054,57 @@ def test_a_disk_full_split_leaves_no_parts_behind(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         rel.split_file(src, work, 1000)
     assert list(work.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# check_token — doctor 의 '토큰 유효성' 점검(존재 != 유효)
+# ---------------------------------------------------------------------------
+def _patch_requests_get(monkeypatch, resp=None, exc=None):
+    import requests
+
+    def fake_get(url, **kw):
+        assert url.endswith("/user")
+        assert "Bearer" in kw["headers"]["Authorization"]
+        if exc is not None:
+            raise exc
+        return resp
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+
+def test_check_token_valid_is_O(monkeypatch):
+    r = FakeResponse(200, {"login": "someone"})
+    r.headers = {"X-OAuth-Scopes": "repo"}
+    _patch_requests_get(monkeypatch, resp=r)
+    mark, detail = check_token("ghp_fake")
+    assert mark == "O"
+    assert "someone" in detail
+
+
+def test_check_token_401_is_X_and_fails_doctor(monkeypatch):
+    # 만료/거절은 doctor 를 빨갛게 — 이게 '모두 정상인데 업로드 전멸' 을 막는 핵심.
+    _patch_requests_get(monkeypatch, resp=FakeResponse(401))
+    mark, detail = check_token("ghp_expired")
+    assert mark == "X"
+    assert "갱신" in detail
+
+
+def test_check_token_403_is_X(monkeypatch):
+    _patch_requests_get(monkeypatch, resp=FakeResponse(403))
+    assert check_token("ghp_x")[0] == "X"
+
+
+def test_check_token_network_error_is_warn_not_fail(monkeypatch):
+    # 오프라인/타임아웃은 토큰 탓이 아니므로 거짓 실패(X)를 내면 안 됩니다.
+    import requests
+
+    _patch_requests_get(monkeypatch, exc=requests.ConnectionError("끊김"))
+    assert check_token("ghp_x")[0] == "!"
+
+
+def test_check_token_missing_is_warn_with_logon_note(monkeypatch):
+    # 이 세션에서 안 보여도(= SSH/서비스 세션 차이) 확정 실패로 보지 않습니다.
+    monkeypatch.setattr("syncnote.release.secrets.get", lambda *a, **k: None)
+    mark, detail = check_token(None)
+    assert mark == "!"
+    assert "세션" in detail

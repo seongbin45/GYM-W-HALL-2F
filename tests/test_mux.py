@@ -54,6 +54,36 @@ def media(tmp_path):
     return video, system, mic
 
 
+def test_mux_failure_writes_sidecar_log(media, tmp_path):
+    """합치기 실패 시 전체 stderr·명령을 <파일>.muxfail.log 로 남깁니다.
+
+    실제로 한 번 일어난 '합치기 실패(code 1) -> 영상만' 의 원인을 끝내 모른 건
+    전체 stderr 가 어디에도 안 남아서였습니다. 그 재발을 진단 가능하게 합니다.
+    """
+    from syncnote.recorder.ffmpeg_util import FfmpegError
+
+    video, _system, _mic = media
+    bad = tmp_path / "bad.wav"          # 44바이트 초과라 mux 가 거르지 않지만, 열 수는 없음
+    bad.write_bytes(b"this is not a real wav payload at all" * 4)
+    out = tmp_path / "out.mkv"
+
+    with pytest.raises(FfmpegError) as ei:
+        mux(out, video, 0.0, [MuxInput(bad, "mic", 0.0)],
+            delete_video=False, delete_audio=False)
+
+    # RuntimeError 하위라 기존 except RuntimeError 도 그대로 잡습니다.
+    assert isinstance(ei.value, RuntimeError)
+    assert ei.value.stderr                       # 전체 stderr 를 들고 있음
+    assert ei.value.cmd and ei.value.cmd[0]
+
+    sidecar = out.with_suffix(out.suffix + ".muxfail.log")
+    assert sidecar.exists()
+    text = sidecar.read_text(encoding="utf-8")
+    assert "ffmpeg stderr" in text
+    assert "실행한 명령" in text
+    assert str(bad.name) in text                 # 입력 목록이 들어감
+
+
 def test_separate_tracks_are_named(media, tmp_path):
     video, system, mic = media
     out = tmp_path / "out.mkv"
