@@ -172,6 +172,28 @@ def test_a_dead_holders_lock_is_stolen_immediately(stamps, monkeypatch):
     T._release()
 
 
+def test_reclaiming_a_dead_lock_logs_the_holder_pid(stamps, monkeypatch, caplog):
+    """잠금을 회수할 때 '직전 등록(pid=…)이 끝맺지 못함' 을 로그로 남겨야 합니다.
+
+    잠금이 남았다는 건 쥔 프로세스가 finally 를 못 거치고 비정상 종료했다는 뜻인데,
+    그 프로세스 자신은 아무 흔적도 못 남깁니다. 이 로그가 없으면 다음 사람은 또
+    '원인 불명' 에 부딪힙니다(GYM-W-HALL-2F 사례)."""
+    import logging
+
+    from syncnote.recorder import lock as rec_lock
+
+    lock = T._lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("31544", encoding="utf-8")              # 죽은 holder 의 PID
+    monkeypatch.setattr(rec_lock, "_pid_exists", lambda pid: pid != 31544)
+    with caplog.at_level(logging.WARNING):
+        assert T._acquire(0) is True
+    T._release()
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "31544" in msgs
+    assert "회수" in msgs
+
+
 def test_a_live_holders_lock_is_not_stolen(stamps, monkeypatch):
     from syncnote.recorder import lock as rec_lock
 
