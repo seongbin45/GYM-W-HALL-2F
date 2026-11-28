@@ -361,3 +361,23 @@ def test_cli_parser_and_bat_and_task():
     ps = (root / "scripts" / "register_tasks.ps1").read_text(encoding="utf-8-sig")
     assert 'Register-One "RemoteOps" (New-HiddenAction "remote_ops.bat"' in ps
     assert "RemoteOps" in tasks.EXPECTED
+
+
+# ---------------------------------------------------------------------------
+# remote_ops 비밀 슬롯(#103 회귀): 등록이 빠져 폴링마다 트레이스백이 쌓였다
+# ---------------------------------------------------------------------------
+def test_remote_ops_is_a_known_secret_slot():
+    from syncnote import secrets
+
+    assert "remote_ops" in secrets.SLOTS
+
+
+def test_get_remote_ops_optional_returns_none_not_raises(monkeypatch):
+    """poll_once 는 secrets.get("remote_ops", required=False) 를 부른다.
+    슬롯이 없으면 required=False 여도 '알 수 없는 항목' 으로 터져(폴링마다 트레이스백),
+    서명 검증이 전혀 안 됐다. 이제는 조용히 None 이어야 한다."""
+    from syncnote import secrets
+
+    monkeypatch.delenv("SYNCNOTE_REMOTE_OPS_SECRET", raising=False)
+    monkeypatch.setattr(secrets, "_keyring", lambda: (_ for _ in ()).throw(secrets.SecretsError("no backend")))
+    assert secrets.get("remote_ops", required=False) is None

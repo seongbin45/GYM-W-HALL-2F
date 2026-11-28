@@ -33,6 +33,11 @@ SLOTS: dict[str, Slot] = {
     "openai": Slot("openai_api_key", "OPENAI_API_KEY", "OpenAI API 키"),
     "icecast": Slot("icecast_source_password", "SYNCNOTE_ICECAST_PASSWORD",
                     "Icecast 소스 비밀번호 (stream.server = \"icecast\" 일 때만)"),
+    # 원격 작업(remote_ops): 소유자가 서명한 계획을 검증하는 HMAC 공유 비밀.
+    # 등록돼 있지 않으면 get("remote_ops", required=False) 가 '알 수 없는 항목' 으로
+    # 예외를 던져, 폴링마다 트레이스백이 쌓이고 서명 검증이 전혀 안 됐습니다(#103 회귀).
+    "remote_ops": Slot("remote_ops_secret", "SYNCNOTE_REMOTE_OPS_SECRET",
+                       "원격 작업 서명 검증용 공유 비밀(HMAC)"),
 }
 
 

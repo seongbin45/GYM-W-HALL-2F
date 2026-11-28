@@ -288,10 +288,22 @@ def _acquire(wait_sec: float) -> bool:
         except FileExistsError:
             # 쥔 PID 가 죽었거나(바로), 너무 오래됐으면(백스톱) 치우고 다시 시도
             try:
-                stale = _holder_dead(lock) or (time.time() - lock.stat().st_mtime > LOCK_STALE_SEC)
+                dead = _holder_dead(lock)
+                age = time.time() - lock.stat().st_mtime
             except OSError:
                 continue                 # 방금 사라짐 — 다시 시도
-            if stale:
+            if dead or age > LOCK_STALE_SEC:
+                # 왜 치웠는지 남깁니다. 잠금이 남아 있다는 건 쥔 프로세스가 finally 를
+                # 거치지 못하고 비정상 종료(강제 종료·전원 차단·세션 종료)했다는 뜻이고,
+                # 그 프로세스 자신은 아무 흔적도 못 남기므로, 이 로그가 '직전 등록이 왜
+                # 안 끝났는지' 를 알 수 있는 유일한 기록입니다(원인 불명 방지).
+                try:
+                    holder = lock.read_text(encoding="utf-8").strip() or "?"
+                except OSError:
+                    holder = "?"
+                why = "쥔 프로세스가 죽음" if dead else f"너무 오래됨({age:.0f}초)"
+                log.warning("등록 잠금 회수: 직전 등록(pid=%s)이 끝맺지 못했습니다 — %s. "
+                            "비정상 종료(강제 종료·전원 차단 등)로 보입니다.", holder, why)
                 try:
                     lock.unlink()
                 except OSError:
