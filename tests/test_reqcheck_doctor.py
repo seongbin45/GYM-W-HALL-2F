@@ -50,6 +50,28 @@ def test_doctor_json_is_structured_and_text_unchanged(tmp_path, capsys):
     assert "환경 점검" in text and "파이썬 패키지" in text and not text.lstrip().startswith("{")
 
 
+def test_doctor_shows_recent_local_problems(tmp_path, capsys, monkeypatch):
+    """doctor 가 네트워크·토큰 없이 로컬 로그에서 최근 실패를 보여 줘야 합니다.
+    incidents 업로드 경로는 토큰이 죽으면 같이 죽으므로, 접속만 하면 보이는
+    로컬 자기기록이 필요합니다."""
+    # 토큰 실검증은 네트워크를 타므로 테스트에서는 막습니다(이 테스트의 관심사 아님).
+    monkeypatch.setattr("syncnote.release.check_token", lambda *a, **k: ("!", "확인 생략"))
+    d = tmp_path / "d"
+    (d / "logs").mkdir(parents=True)
+    (d / "logs" / "syncnote.log").write_text(
+        "2026-11-27 18:00:00 [INFO   ] x: ok\n"
+        "2026-11-27 18:38:03 [ERROR  ] syncnote.cli: 업로드 0건 — 한 개도 못 올렸습니다\n",
+        encoding="utf-8")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[general]\ndata_dir = "' + d.as_posix() + '"\n'
+                   '[github]\nowner = "o"\nrepo = "r"\n[eclass]\nenabled = false\n'
+                   '[recording]\nenabled = false\n[transcribe]\nenabled = false\n', encoding="utf-8")
+    cli.main(["-q", "-c", str(cfg), "doctor"])
+    text = capsys.readouterr().out
+    assert "최근 이상(로컬" in text
+    assert "업로드 0건" in text
+
+
 def test_doctor_json_reports_config_errors(tmp_path, capsys):
     cfg = tmp_path / "config.toml"
     cfg.write_text('[eclass]\nenabled = true\nusername = ""\n', encoding="utf-8")

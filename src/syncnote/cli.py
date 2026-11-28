@@ -357,6 +357,33 @@ def _doctor(args, rep: dict) -> int:
             print(f"    [X] {exc}")
             audio.append({"mark": "X", "name": "장치", "detail": str(exc)})
 
+    # 최근 이상(로컬) — 네트워크·토큰 없이 이 PC 로그만 보고 '무슨 일이 있었나'.
+    # incidents 는 '올리기 대기열' 이라 올라가면 비고, 토큰이 죽으면 올리지도 못합니다
+    # (실패를 알리는 그 경로가 실패와 같은 토큰에 묶여 있음). 여기서는 로그 파일과
+    # 합치기 실패 사이드카를 직접 읽어, 접속만 하면(SSH·RDP·현장) 항상 보이게 합니다.
+    # 판정(ok)에는 넣지 않습니다 — 지난 일시적 오류로 doctor 가 거짓 빨강이 되지 않도록.
+    if not getattr(args, "json", False):
+        print("\n  최근 이상(로컬 로그 — 네트워크 불필요)")
+        try:
+            logf = layout.logs / "syncnote.log"
+            errs: list[str] = []
+            if logf.exists():
+                tail = logf.read_text(encoding="utf-8", errors="replace").splitlines()[-800:]
+                errs = [ln for ln in tail if ("[ERROR" in ln or "[WARNING" in ln)]
+            if errs:
+                print(f"    최근 ERROR/WARNING {len(errs)}건 (마지막 8건):")
+                for ln in errs[-8:]:
+                    print("      " + ln[:150])
+            else:
+                print("    최근 ERROR/WARNING 없음")
+            rec = layout.recordings
+            fails = (sorted(rec.rglob("*.muxfail.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+                     if rec.exists() else [])
+            if fails:
+                print(f"    합치기 실패 상세 {len(fails)}건 — 최근: {fails[0]}")
+        except Exception as exc:                 # noqa: BLE001 — 점검이 이걸로 죽지 않게
+            print(f"    (로컬 로그 확인 실패: {exc})")
+
     print("\n" + "=" * 62)
     verdict = "모두 정상입니다." if ok else "위의 [X] 항목을 해결하세요."
     print(verdict)
